@@ -1,0 +1,12 @@
+Metric,Value
+Model,ResNet18 (Pretrained)
+Dataset Size,87000
+Train/Val Split,69600/17400
+Batch Size,32
+Learning Rate,0.001
+Num Epochs,10
+Number of Classes,29
+Accuracy,0.9989
+Precision,0.9989
+Recall,0.9989
+F1-Score,0.9989
