@@ -1,0 +1,17 @@
+Metric,Value
+Model,YOLOv8n (Hand Detection Fine-tune)
+Dataset Root,data\processed_frames
+Train Images,154
+Validation Images,510
+Batch Size,16
+Image Size,640
+Learning Rate,0.0001
+Weight Decay,0.0001
+Num Epochs,25
+Base Model,models\best_model_m1.pt
+Best Weights,D:\vscode\Python\projects\sign-language-pipline\runs\detect\runs\hand_detection_fine_tune\train_m1_fine_tune-2\weights\best.pt
+metrics/precision(B),0.8275299012983403
+metrics/recall(B),0.5979696525742679
+metrics/mAP50(B),0.7195884863663847
+metrics/mAP50-95(B),0.36458472718527546
+fitness,0.36458472718527546
