@@ -8,7 +8,8 @@ import torchvision.models as models
 class SignLanguageModel(nn.Module):
     def __init__(self, num_classes):
         super(SignLanguageModel, self).__init__()
-        self.resnet = models.resnet18(pretrained=True)
+        # self.resnet = models.resnet18(pretrained=True)
+        self.resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
     def forward(self, x):
         x = self.resnet(x)

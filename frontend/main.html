@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Sign Language Text Converter</title>
+	<link rel="stylesheet" href="/frontend/main.css" />
+</head>
+<body>
+	<main class="app-shell">
+		<section class="hero">
+			<p class="eyebrow">Sign Language Pipeline</p>
+			<h1>Image to Text và Video to Text</h1>
+			<p class="subtitle">
+				Giao diện đơn giản để gọi 2 API trong <span>API.py</span> và nhận kết quả chuyển ký hiệu thành văn bản.
+			</p>
+		</section>
+
+		<section class="panel-grid">
+			<article class="card">
+				<div class="card-head">
+					<h2>Image to Text</h2>
+					<span class="chip">POST /predict/image</span>
+				</div>
+				<p>Chọn một ảnh bàn tay rồi gửi lên backend để nhận text dự đoán.</p>
+				<label class="file-picker">
+					<input id="imageInput" type="file" accept="image/*" />
+					<span>Chọn ảnh</span>
+				</label>
+				<button id="imageBtn" class="primary-btn" type="button">Chạy image to text</button>
+			</article>
+
+			<article class="card">
+				<div class="card-head">
+					<h2>Video to Text</h2>
+					<span class="chip">POST /predict/video</span>
+				</div>
+				<p>Bắt đầu luồng webcam và để backend xử lý video thành text.</p>
+				<button id="videoBtn" class="primary-btn secondary" type="button">Chạy video to text</button>
+			</article>
+		</section>
+
+		<section class="result-card">
+			<div class="result-header">
+				<h2>Kết quả</h2>
+				<span id="statusBadge" class="status idle">Sẵn sàng</span>
+			</div>
+			<pre id="resultBox">Chưa có dữ liệu đầu ra.</pre>
+		</section>
+	</main>
+
+	<script src="/frontend/main.js"></script>
+</body>
+</html>

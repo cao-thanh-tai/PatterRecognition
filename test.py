@@ -1,5 +1,6 @@
-# test yolo trc web camp
+"""Các hàm suy luận cho webcam và ảnh của bài toán nhận diện ngôn ngữ ký hiệu."""
 import csv
+import os
 from PIL import Image
 
 from torchvision import transforms
@@ -9,6 +10,7 @@ from src.m2 import SignLanguageModel
 import cv2
 import time
 from collections import Counter
+import numpy as np
 
 
 
@@ -16,183 +18,239 @@ model_1 = YOLO('models/best_model_m1_fine_tune.pt')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 model_2 = SignLanguageModel(num_classes=29)
-model_2.load_state_dict(torch.load('models/best_model_m2.pth'))
+model_2.load_state_dict(torch.load('models/best_model_m2.pth', weights_only=True, map_location=device))
 model_2.to(device)
 model_2.eval()
 
 preprocess = transforms.Compose([
-    # transforms.ToPILImage(),         # Chuyển từ mảng Numpy (OpenCV) sang ảnh PIL để transforms hiểu
-    transforms.Resize((224, 224)),   # Đổi kích thước về chuẩn lúc train (ví dụ ResNet thường là 224x224)
-    transforms.ToTensor(),           # CỰC KỲ QUAN TRỌNG: Chuyển ảnh từ PIL sang PyTorch TENSOR và scale về [0, 1]
-    transforms.Normalize(            # Chuẩn hóa chuẩn ImageNet (hoặc theo tập train của nhóm bạn)
+    transforms.Resize((224, 224)),   # Khớp với kích thước khi train.
+    transforms.ToTensor(),           # Chuyển ảnh PIL sang tensor đã chuẩn hóa.
+    transforms.Normalize(            # Áp dụng chuẩn hóa ImageNet.
         mean=[0.485, 0.456, 0.406], 
         std=[0.229, 0.224, 0.225]
     )
 ])
 
-# lấy mapping từ index sang chữ cái
+# Ánh xạ từ chỉ số sang nhãn.
 idx_to_letter = {}
 with open("label_mapping.csv", "r", encoding="utf-8") as f:
     reader = csv.reader(f)
-    next(reader)  # Bỏ qua tiêu đề
+    next(reader)  # Bỏ qua dòng tiêu đề.
     for row in reader:
         idx, letter = int(row[0]), row[1]
         idx_to_letter[idx] = letter
 
-# --- CẤU HÌNH THUẬT TOÁN LỌC OUTPUT ---
-BUFFER_SIZE = 12       # Lưu kết quả của 12 frame gần nhất để bầu chọn
-CONFIDENCE_THRESHOLD = 0.7  # Tỉ lệ đồng thuận phải trên 70% thì mới chốt chữ
-COOLDOWN_TIME = 1.0    # Cần ít nhất 1 giây để ghi nhận một chữ tiếp theo (tránh double click chữ)
+# Cấu hình làm mượt đầu ra.
+BUFFER_SIZE = 12       # Bỏ phiếu trên 12 frame gần nhất.
+CONFIDENCE_THRESHOLD = 0.7  # Cần ít nhất 70% đồng thuận.
+COOLDOWN_TIME = 1.0    # Chờ trước khi nhận ký tự tiếp theo.
 
-# Các biến trạng thái chạy ngầm
-output_buffer = []     # Bộ nhớ tạm lưu chữ
-last_detected_letter = None  # Chữ cái cuối cùng được chốt thành công
-last_detected_time = 0       # Mốc thời gian chốt chữ gần nhất
-final_sentence = ""    # Câu hoàn chỉnh sau khi ghép các chữ cái lại
+# Trạng thái chạy.
+output_buffer = []     # Bộ đệm tạm của các dự đoán.
+last_detected_letter = None  # Nhãn cuối cùng đã được chốt.
+last_detected_time = 0       # Mốc thời gian chốt nhãn gần nhất.
+final_sentence = ""    # Câu hoàn chỉnh đang ghép dần.
 
 
-def crop_hand_with_padding(img, box, padding_ratio=0.15):
+def crop_hand_with_padding(img, box):
     """
-    Hàm cắt vùng bàn tay từ ảnh gốc và nới rộng ra theo tỉ lệ mong muốn.
-    
+    Cắt vùng bàn tay từ ảnh gốc.
+
+    Một nền trắng kích thước 244x244 sẽ được tạo ra và vùng cắt được dán vào giữa.
     Args:
-        img: Ảnh gốc (mảng numpy từ webcam)
-        box: Bounding box của YOLO (r.boxes[i])
-        padding_ratio: Tỉ lệ nới rộng (0.15 tương đương 15%)
+        img: Ảnh gốc từ webcam.
+        box: Bounding box của YOLO (r.boxes[i]).
+        padding_ratio: Tỷ lệ đệm do nơi gọi truyền vào.
         
     Returns:
-        hand_crop: Vùng ảnh bàn tay đã nới rộng, hoặc None nếu cắt lỗi
+        hand_crop: Ảnh bàn tay đã cắt, hoặc None nếu cắt lỗi.
     """
-    # Lấy tọa độ gốc từ YOLO
+    # Lấy tọa độ khung.
     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
     
-    # 1. Tính chiều rộng và chiều cao của khung bàn tay hiện tại
+    # Tính kích thước khung.
     box_w = x2 - x1
     box_h = y2 - y1
     
-    # 2. Tính độ rộng cần nới ra 4 hướng
+    # Tạo nền trắng 244x244.
+    hand_crop = 255 * np.ones((244, 244, 3), dtype=np.uint8)
+    
+    # Canh vùng cắt vào giữa nền.
+    center_x = 244 // 2
+    center_y = 244 // 2
+    
+    # Tính tọa độ dán ảnh.
+    paste_x1 = center_x - box_w // 2
+    paste_y1 = center_y - box_h // 2
+    paste_x2 = paste_x1 + box_w
+    paste_y2 = paste_y1 + box_h
+    
+    # Dán vùng bàn tay lên nền trắng.
+    hand_crop[paste_y1:paste_y2, paste_x1:paste_x2] = img[y1:y2, x1:x2]
+    
+    # Trả về None nếu vùng cắt rỗng.
+    if hand_crop.size == 0:
+        return None
+    return hand_crop
+
+
+def crop_hand_with_padding_v2(img, box, padding_ratio=0.15):
+    """
+    Cắt vùng bàn tay từ ảnh gốc với phần đệm mở rộng.
+
+    Args:
+        img: Ảnh gốc từ webcam.
+        box: Bounding box của YOLO (r.boxes[i]).
+        padding_ratio: Tỷ lệ đệm áp dụng quanh khung.
+        
+    Returns:
+        hand_crop: Ảnh bàn tay đã cắt, hoặc None nếu cắt lỗi.
+    """
+    # Lấy tọa độ khung.
+    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+    
+    # Tính kích thước khung.
+    box_w = x2 - x1
+    box_h = y2 - y1
+    
+    # Tính phần đệm theo tỷ lệ cấu hình.
     pad_w = int(box_w * padding_ratio)
     pad_h = int(box_h * padding_ratio)
     
-    # 3. Tiến hành nới rộng tọa độ
-    x1_pad = x1 - pad_w
-    y1_pad = y1 - pad_h
-    x2_pad = x2 + pad_w
-    y2_pad = y2 + pad_h
+    # Giới hạn tọa độ sau khi thêm đệm trong biên ảnh.
+    new_x1 = max(0, x1 - pad_w)
+    new_y1 = max(0, y1 - pad_h)
+    new_x2 = min(img.shape[1], x2 + pad_w)
+    new_y2 = min(img.shape[0], y2 + pad_h)
     
-    # 4. CHẶN LỖI TRÀN VIỀN: Ép tọa độ luôn nằm trong giới hạn của bức ảnh gốc
-    img_h, img_w, _ = img.shape
-    x1_pad = max(0, x1_pad)
-    y1_pad = max(0, y1_pad)
-    x2_pad = min(img_w, x2_pad)
-    y2_pad = min(img_h, y2_pad)
+    # Cắt vùng bàn tay đã mở rộng.
+    hand_crop = img[new_y1:new_y2, new_x1:new_x2]
     
-    # 5. Cắt ảnh
-    hand_crop = img[y1_pad:y2_pad, x1_pad:x2_pad]
-    
-    # Nếu ảnh cắt ra bị rỗng thì trả về None
+    # Trả về None nếu vùng cắt rỗng.
     if hand_crop.size == 0:
         return None
-    # debug_view = cv2.resize(hand_crop, (300, 300))
-    # cv2.imshow("Anh thuc te ném vao ResNet", debug_view)
-    return hand_crop
+    
+    return hand_crop    
 
 def video_stream():
     results = model_1.predict(source=0, show=False, conf=0.5, iou=0.3, stream=True)
     global last_detected_letter, last_detected_time, final_sentence, output_buffer
+    
+    # Xóa các ảnh kết quả cũ trước khi bắt đầu.
+    output_dir = "outputs/images"
+    if os.path.exists(output_dir):
+        for filename in os.listdir(output_dir):
+            file_path = os.path.join(output_dir, filename)
+            try:
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+            except Exception as e:
+                print(f"Không thể xóa file {file_path}. Lỗi: {e}")
     for r in results:
-        img = r.orig_img  # Đây là ẢNH GỐC to đùng từ webcam
+        img = r.orig_img  # Khung hình gốc từ webcam.
         display_img = r.plot()
         
-        # Duyệt qua từng khung hình vuông mà YOLO tìm thấy bàn tay
+        # Xử lý từng khung bàn tay được phát hiện.
         for box in r.boxes:
-            # Lấy tọa độ (x_min, y_min, x_max, y_max) dạng số nguyên
+            # Lấy tọa độ khung ở dạng số nguyên.
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             
-            # CÂY ĐŨA THẦN Ở ĐÂY: Cắt riêng vùng bàn tay ra khỏi ảnh gốc
-            # Trong OpenCV/Numpy, cắt ảnh theo thứ tự: ảnh[y_min:y_max, x_min:x_max]
-            hand_crop = crop_hand_with_padding(img, box, padding_ratio=0.15)
+            # Cắt vùng bàn tay từ ảnh gốc.
+            hand_crop = crop_hand_with_padding_v2(img, box, padding_ratio=0.15)
             
-            # Nếu cắt bị lỗi hoặc ảnh trống thì bỏ qua
+            # Bỏ qua nếu vùng cắt không hợp lệ.
             if hand_crop is None:
                 continue
             
             hand_crop_rgb = cv2.cvtColor(hand_crop, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(hand_crop_rgb)
-            # Tiến hành xử lý input cho hand_crop
+            # Tiền xử lý ảnh cho bộ phân loại.
             input_tensor = preprocess(pil_image)
-            input_batch = input_tensor.unsqueeze(0) # Thêm chiều batch size -> [1, 3, 224, 224]
+            input_batch = input_tensor.unsqueeze(0) # Thêm chiều batch.
             
             
-            # Ném vùng tay đã cắt vào model_2
+            # Chạy mô hình phân loại.
             with torch.no_grad():
                 input_batch = input_batch.to(device)
                 output = model_2(input_batch)
                 
-            # Lấy kết quả dự đoán ký hiệu
+            # Lấy lớp dự đoán.
             _, predicted_class = torch.max(output, 1)
             
-            current_prediction = predicted_class.item() # Giả sử trả về số hoặc chữ: ví dụ 'A'
+            current_prediction = predicted_class.item() # Chỉ số lớp.
         
-            # 1. Thêm kết quả của frame hiện tại vào bộ đệm
+            # Thêm dự đoán hiện tại vào bộ đệm bỏ phiếu.
             output_buffer.append(current_prediction)
             
-            # Nếu bộ đệm vượt quá kích thước cấu hình thì xóa bớt thằng cũ nhất
+            # Giữ bộ đệm trong giới hạn cấu hình.
             if len(output_buffer) > BUFFER_SIZE:
                 output_buffer.pop(0)
                 
-            # 2. KIỂM TRA ĐIỀU KIỆN ĐỂ CHỐT CHỮ
+            # Kiểm tra xem nhãn đã ổn định để chốt chưa.
             if len(output_buffer) == BUFFER_SIZE:
-                # Đếm xem mỗi chữ xuất hiện bao nhiêu lần trong bộ đệm
+                # Đếm tần suất nhãn trong bộ đệm.
                 counter = Counter(output_buffer)
                 most_common_letter, count = counter.most_common(1)[0]
                 
-                # Tính tỉ lệ đồng thuận (ví dụ: xuất hiện 9/12 frame -> ~75%)
+                # Tính tỷ lệ đồng thuận.
                 confidence = count / BUFFER_SIZE
                 
-                # Nếu đạt đủ độ tin tưởng và đã qua thời gian Cooldown
+                # Áp dụng ngưỡng chấp nhận và thời gian chờ.
                 current_time = time.time()
                 if confidence >= CONFIDENCE_THRESHOLD and (current_time - last_detected_time) > COOLDOWN_TIME:
                     
-                    # CHỈ LẤY CHỮ MỚI (Tránh việc giữ nguyên tay nó cứ cộng dồn chữ AAAAAAA liên tục)
+                    # Chỉ nhận nhãn mới để tránh lặp lại.
                     if most_common_letter != last_detected_letter:
                         last_detected_letter = most_common_letter
                         last_detected_time = current_time
                         
-                        # mapping từ index sang chữ cái
+                        # Ánh xạ chỉ số sang nhãn.
                         letter_char = idx_to_letter[most_common_letter]
-                        # Cộng chữ mới vào câu hoàn chỉnh
-                        final_sentence += letter_char
-                        # lưu ảnh chốt vào thư mục output/images
+                        
+                        # Xử lý các nhãn điều khiển đặc biệt.
+                        if letter_char == "del":
+                            final_sentence = final_sentence[:-1]  # Xóa ký tự cuối.
+                        elif letter_char == "space":
+                            final_sentence += " "  # Thêm dấu cách.
+                        elif letter_char == "nothing":
+                            pass
+                        else:
+                        # Ghép ký tự vừa nhận vào câu.
+                            final_sentence += letter_char
+                        # Lưu ảnh đã chốt để đối chiếu sau.
                         cv2.imwrite(f"outputs/images/{letter_char}_{int(time.time())}.jpg", hand_crop)
                         
                         print("\n" + "="*40)
-                        print(f"🎯 ĐÃ CHỐT CHỮ: {letter_char} (Độ tự tin: {confidence*100:.1f}%)")
-                        print(f"📝 CÂU HIỆN TẠI: {final_sentence}")
+                        print(f"Đã chốt chữ: {letter_char} (độ tự tin: {confidence*100:.1f}%)")
+                        print(f"Câu hiện tại: {final_sentence}")
                         print("="*40 + "\n")
-                # print(f"Ký hiệu nhận diện được: {predicted_class.item()}")
                 
-        # Vẽ một cái nền đen mờ ở góc trên để chữ nổi bật, dễ nhìn hơn
+        # Vẽ nền tối cho phần chữ hiển thị.
         cv2.rectangle(display_img, (10, 10), (600, 60), (0, 0, 0), -1)
         
-        # Ghi câu hiện tại lên góc trái màn hình webcam
-        # text: "TEXT: <câu của ông>"
+        # Hiển thị câu hiện tại trên khung hình.
         cv2.putText(display_img, f"TEXT: {final_sentence}", (20, 45), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.imshow("Webcam - Nhấn 'q' để thoát", display_img)
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Tắt cụp webcam!")
-            break # Bẻ gãy vòng lặp for ngay lập tức
+            print("Đã đóng webcam theo yêu cầu người dùng.")
+            break # Thoát khỏi vòng lặp khung hình.
     del results
     cv2.destroyAllWindows()
-    print("Kết thúc luồng video, trả về câu hoàn chỉnh:", final_sentence)
+    print("Kết thúc luồng video. Câu hoàn chỉnh:", final_sentence)
+    
+    return final_sentence  # Trả về câu hoàn chỉnh sau khi kết thúc luồng video.
 
-def image(img):
-    input_tensor = preprocess(img)
-    input_batch = input_tensor.unsqueeze(0) # Thêm chiều batch size -> [1, 3, 224, 224]
+def image(img_path):
+    img = cv2.imread(img_path)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img_rgb)
+    input_tensor = preprocess(img_pil)
+    input_batch = input_tensor.unsqueeze(0) # Thêm chiều batch.
     with torch.no_grad():
         input_batch = input_batch.to(device)
         output = model_2(input_batch)
     _, predicted_class = torch.max(output, 1)
-    print(f"Ký hiệu nhận diện được: {predicted_class.item()}")
+    print(f"Chỉ số nhãn dự đoán: {predicted_class.item()}")
+    return idx_to_letter[predicted_class.item()]  # Trả về ký tự dự đoán từ ảnh.
 

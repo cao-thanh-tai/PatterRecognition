@@ -1,30 +1,49 @@
-# main.py
-from fastapi import FastAPI
+import tempfile
+from pathlib import Path
+
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import uvicorn
-# Import các hàm xử lý từ file tách riêng của bạn
-# (Giả sử bạn đã tạo file models_predictor.py như ở bước trước)
+# Các hàm suy luận.
 from test import video_stream, image
 
-# 1. Khởi tạo FastAPI app
+# Ứng dụng FastAPI.
 app = FastAPI()
 
-# 2. Khai báo một API Endpoint (Route) mẫu
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
+
+# Route kiểm tra trạng thái.
 @app.get("/")
 def read_root():
-    return {"message": "Server FastAPI đã sẵn sàng, các model đã load xong trên RAM!"}
+    return FileResponse("frontend/main.html")
 
 @app.post("/predict/video")
 def run_video_stream():
-    # Hàm này gọi model cực nhanh vì model đã được nạp ở scope global khi import
+    # Dùng model đã được nạp khi import.
     results = video_stream()
     return {"status": "success", "results": str(results)}
 
 @app.post("/predict/image")
-def run_image_prediction(image_path: str):
-    # Hàm này gọi model cực nhanh vì model đã được nạp ở scope global khi import
-    results = image(image_path)
+async def run_image_prediction(uploaded_image: UploadFile = File(...)):
+    # Dùng model đã được nạp khi import.
+    suffix = Path(uploaded_image.filename or "image.jpg").suffix or ".jpg"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(await uploaded_image.read())
+        temp_path = temp_file.name
+
+    results = image(temp_path)
     return {"status": "success", "results": str(results)}
 
-# 3. Đoạn code để bạn có thể bấm "Run" trực tiếp file .py này trong VS Code
+# Chạy trực tiếp khi mở file.
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("API:app", host="127.0.0.1", port=8000, reload=True)
